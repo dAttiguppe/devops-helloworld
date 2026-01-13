@@ -1,72 +1,104 @@
 import java.io.*;
+import java.util.*;
 
 public class JsonToPactDsl {
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         if (args.length != 1) {
             System.out.println("Usage: java JsonToPactDsl input.json");
             return;
         }
         
-        String json = readFile(args[0]);
-        System.out.println("JSON: " + json.substring(0, 100) + "...");
-        
-        System.out.println("\n// === TRADITIONAL PACT DSL ===\n");
-        System.out.println("PactDslJsonBody body = PactDslJsonBody.object()");
-        
-        // Generate traditional DSL based on JSON content
-        generateTraditionalDsl(json);
-        
-        System.out.println("    .asBody();");
+        try {
+            String json = readFile(args[0]);
+            JsonNode root = parseJson(json);
+            
+            System.out.println("📁 INPUT JSON:");
+            System.out.println(json);
+            System.out.println("\n" + "=".repeat(60));
+            
+            System.out.println("\n// === GENERATED PACT DSL ===\n");
+            System.out.println("PactDslJsonBody body = PactDslJsonBody.object()");
+            generateDsl(root, "    ");
+            System.out.println("    .asBody();");
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
     
-    static String readFile(String filename) throws Exception {
+    static String readFile(String filename) throws IOException {
         BufferedReader reader = new BufferedReader(new FileReader(filename));
         StringBuilder sb = new StringBuilder();
         String line;
         while ((line = reader.readLine()) != null) {
-            sb.append(line.trim());
+            sb.append(line);
         }
         reader.close();
         return sb.toString();
     }
     
-    static void generateTraditionalDsl(String json) {
-        // status field
-        if (json.contains("\"status\"")) {
-            System.out.println("    .stringType(\"status\", \"success\")");
-        }
+    static class JsonNode {
+        Map<String, Object> fields = new LinkedHashMap<>();
         
-        // weekStartDay enum
-        if (json.contains("weekStartDay") || json.contains("MONDAY")) {
-            System.out.println("    .string(\"weekStartDay\", \"MONDAY\")");
+        static JsonNode parse(String json) {
+            JsonNode root = new JsonNode();
+            
+            // Extract "key": "value"
+            String[] stringPairs = json.split("\"\\s*:\\s*\"");
+            for (String pair : stringPairs) {
+                if (pair.contains(":") && pair.contains("\"")) {
+                    String[] parts = pair.split(":", 2);
+                    if (parts.length == 2) {
+                        String key = parts[0].replaceAll("[^a-zA-Z0-9_]", "");
+                        String value = parts[1].replaceAll("[^a-zA-Z0-9_]", "");
+                        if (!key.isEmpty() && !value.isEmpty()) {
+                            root.fields.put(key, value);
+                        }
+                    }
+                }
+            }
+            
+            // Extract numbers
+            String[] numberPairs = json.split("\"\\s*:\\s*");
+            for (String pair : numberPairs) {
+                if (pair.matches(".*[0-9].*")) {
+                    String[] parts = pair.split(",", 2);
+                    String key = parts[0].replaceAll("[^a-zA-Z0-9_]", "");
+                    String value = parts[0].replaceAll("[^0-9.]", "");
+                    try {
+                        if (!key.isEmpty() && !value.isEmpty()) {
+                            root.fields.put(key, Long.parseLong(value));
+                        }
+                    } catch (NumberFormatException e) {}
+                }
+            }
+            
+            return root;
         }
-        
-        // user object
-        if (json.contains("\"user\"")) {
-            System.out.println("    .object(\"user\")");
-            System.out.println("        .numberType(\"id\", 123L)");
-            System.out.println("        .stringType(\"name\", \"Alice\")");
-            System.out.println("    .closeObject()");
+    }
+    
+    static void generateDsl(JsonNode node, String indent) {
+        for (Map.Entry<String, Object> entry : node.fields.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            
+            if (value instanceof String strVal) {
+                // Enum detection (UPPERCASE)
+                if (strVal.matches("[A-Z_]+")) {
+                    System.out.printf("%s.string(\"%s\", \"%s\")\n", indent, key, escape(strVal));
+                } else {
+                    System.out.printf("%s.stringType(\"%s\", \"%s\")\n", indent, key, escape(strVal));
+                }
+            } else if (value instanceof Long numVal) {
+                System.out.printf("%s.numberType(\"%s\", %dL)\n", indent, key, numVal);
+            } else if (value instanceof Boolean boolVal) {
+                System.out.printf("%s.booleanType(\"%s\", %b)\n", indent, key, boolVal);
+            }
         }
-        
-        // items array
-        if (json.contains("\"items\"") || json.contains("[{") || json.contains("[]")) {
-            System.out.println("    .eachLike(\"items\")");
-            System.out.println("        .object()");
-            System.out.println("            .numberType(\"id\", 1L)");
-            System.out.println("            .stringType(\"name\", \"book\")");
-            System.out.println("        .closeObject()");
-            System.out.println("    .closeArray()");
-        }
-        
-        // active boolean
-        if (json.contains("\"active\"") || json.contains("true") || json.contains("false")) {
-            System.out.println("    .booleanType(\"active\", true)");
-        }
-        
-        // Default fallback
-        if (json.isEmpty()) {
-            System.out.println("    .stringType(\"message\", \"ok\")");
-        }
+    }
+    
+    static String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
