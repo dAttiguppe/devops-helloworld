@@ -8,12 +8,23 @@ public class JsonToLambdaDsl {
             return;
         }
         
-        String json = Files.readString(new File(args[0]).toPath());
-        JsonNode root = parseJson(json);
+        String json = readFile(args[0]);
+        JsonNode root = JsonNode.parse(json);
         
         System.out.println("// === AUTO-GENERATED MODULAR DSL ===\n");
         generateChunks(root);
         generateMainBody(root);
+    }
+
+    static String readFile(String filename) throws Exception {
+        BufferedReader reader = new BufferedReader(new FileReader(filename));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line.trim());
+        }
+        reader.close();
+        return sb.toString();
     }
 
     static class JsonNode {
@@ -56,13 +67,14 @@ public class JsonToLambdaDsl {
             if (match('[')) return parseArray();
             if (match('"')) return parseStringNode();
             if (match('t') || match('f')) return parseBoolean();
-            if (isDigit()) return parseNumber();
+            if (Character.isDigit(json.charAt(pos)) || json.charAt(pos) == '-') return parseNumber();
             throw new RuntimeException("Invalid JSON at " + pos);
         }
         
         JsonNode parseArray() {
             JsonNode arr = new JsonNode();
             arr.arrays = new ArrayList<>();
+            expect('[');
             while (!match(']')) {
                 arr.arrays.add(parseValue());
                 if (!match(',')) break;
@@ -81,12 +93,8 @@ public class JsonToLambdaDsl {
             StringBuilder sb = new StringBuilder();
             while (!match('"')) {
                 char c = json.charAt(pos++);
-                if (c == '\\') {
-                    c = json.charAt(pos++);
-                    if (c == '"' || c == '\\') sb.append(c);
-                } else {
-                    sb.append(c);
-                }
+                if (c == '\\') c = json.charAt(pos++);
+                sb.append(c);
             }
             return sb.toString();
         }
@@ -94,9 +102,10 @@ public class JsonToLambdaDsl {
         JsonNode parseNumber() {
             JsonNode n = new JsonNode();
             int start = pos;
-            while (pos < json.length() && (isDigit() || json.charAt(pos) == '.' || json.charAt(pos) == 'e' || json.charAt(pos) == 'E' || json.charAt(pos) == '-' || json.charAt(pos) == '+')) {
-                pos++;
-            }
+            while (pos < json.length() && (Character.isDigit(json.charAt(pos)) || 
+                   json.charAt(pos) == '.' || json.charAt(pos) == 'e' || 
+                   json.charAt(pos) == 'E' || json.charAt(pos) == '-' || 
+                   json.charAt(pos) == '+')) pos++;
             String num = json.substring(start, pos);
             try {
                 n.longVal = Long.parseLong(num);
@@ -115,8 +124,7 @@ public class JsonToLambdaDsl {
         
         boolean match(char c) {
             if (pos < json.length() && json.charAt(pos) == c) {
-                pos++;
-                return true;
+                pos++; return true;
             }
             return false;
         }
@@ -127,20 +135,17 @@ public class JsonToLambdaDsl {
         
         boolean matchString(String s) {
             if (json.startsWith(s, pos)) {
-                pos += s.length();
-                return true;
+                pos += s.length(); return true;
             }
             return false;
         }
-        
-        boolean isDigit() { return pos < json.length() && Character.isDigit(json.charAt(pos)); }
     }
 
     static void generateChunks(JsonNode root) {
         List<JsonNode> candidates = findChunkCandidates(root);
         for (JsonNode node : candidates) {
             String name = camelCase(node.key);
-            System.out.println("// === " + name.toUpperCase() + "DSL ===\n");
+            System.out.println("// === " + name.toUpperCase() + " ===\n");
             System.out.println("private static PactDslJsonBody " + name + "Dsl() {");
             System.out.println("  return PactDslJsonBody.object()");
             generateDsl(node, "    ");
@@ -182,13 +187,11 @@ public class JsonToLambdaDsl {
 
     static void handleArray(String key, JsonNode arr, String indent) {
         System.out.printf("%s.eachLike(\"%s\")\n", indent, key);
-        if (!arr.arrays.isEmpty()) {
-            JsonNode first = arr.arrays.get(0);
-            if (!first.objects.isEmpty()) {
-                System.out.println(indent + "  .object()");
-                generateDsl(first, indent + "    ");
-                System.out.printf("%s  .closeObject()\n", indent);
-            }
+        JsonNode first = arr.arrays.get(0);
+        if (!first.objects.isEmpty()) {
+            System.out.println(indent + "  .object()");
+            generateDsl(first, indent + "    ");
+            System.out.printf("%s  .closeObject()\n", indent);
         }
         System.out.printf("%s.closeArray()\n", indent);
     }
