@@ -1,35 +1,31 @@
+import au.com.dius.pact.consumer.dsl.PactDslJsonArray;
 import au.com.dius.pact.consumer.dsl.PactDslJsonBody;
+import au.com.dius.pact.consumer.dsl.PactDslJsonRootValue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.Map.Entry;
 
 public class JsonToPactDslStandalone {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static void main(String[] args) throws IOException {
-        // Your JSON input
         String json = """
             {
               "status": "ON",
-              "items": [
-                {"id": 1, "name": "A"},
-                {"id": 2, "name": "B"}
-              ],
+              "items": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
               "code": 200
             }
             """;
 
-        // Convert to Pact DSL
-        PactDslJsonBody body = JsonToPactDsl.fromJson(json);
-        
-        // Print the generated Pact body (JSON with matchers)
+        PactDslJsonBody body = fromJson(json);
         System.out.println("Generated Pact body:");
         System.out.println(body.getBody());
     }
 
-    // [Include the JsonToPactDsl class methods from previous response here]
     public static PactDslJsonBody fromJson(String json) throws IOException {
         JsonNode root = MAPPER.readTree(json);
         if (!root.isObject()) {
@@ -40,5 +36,5 @@ public class JsonToPactDslStandalone {
         return body;
     }
 
-    // ... rest of the methods (fillObject, handleArray, addPrimitive)
+    // [All three methods above go here]
 }
