@@ -1,180 +1,163 @@
-# 1. Save as JsonToLambdaDsl.java
-# 2. Create input## **Standalone JsonToLambdaDsl - No External Dependencies!**
-
-**Single file with embedded Jackson alternative using `javax.json`:**
-
-```java
-import javax.json.*;
-import javax.json.stream.JsonParser;
 import java.io.*;
-import java.nio.file.Files;
 import java.util.*;
 
 public class JsonToLambdaDsl {
-    private static final int MAX_LINES_PER_CHUNK = 8;
-
     public static void main(String[] args) throws Exception {
         if (args.length != 1) {
-            System.out.println("Usage: java JsonToLambdaDsl <input.json>");
+            System.out.println("Usage: java JsonToLambdaDsl input.json");
             return;
         }
-
-        String jsonContent = Files.readString(new File(args).toPath());
-        JsonStructure root = parseJson(jsonContent);
-
+        
+        String json = Files.readString(new File(args[0]).toPath());
+        JsonNode root = parseJson(json);
+        
         System.out.println("// === AUTO-GENERATED MODULAR DSL ===\n");
-        
-        // Generate chunks + main body
-        Map<String, String> chunks = generateChunks(root);
-        generateMainBody(root, chunks);
+        generateChunks(root);
+        generateMainBody(root);
     }
 
-    private static Map<String, String> generateChunks(JsonStructure root) {
-        Map<String, String> chunks = new LinkedHashMap<>();
-        List<JsonStructure> candidates = findChunkCandidates(root);
+    static class JsonNode {
+        Map<String, JsonNode> objects = new LinkedHashMap<>();
+        List<JsonNode> arrays = null;
+        String stringVal = null;
+        Long longVal = null;
+        Double doubleVal = null;
+        Boolean boolVal = null;
+        String key = null;
         
-        for (JsonStructure candidate : candidates) {
-            String chunkName = createChunkName(candidate);
-            String dslCode = generateChunkDsl(candidate, 2);
-            chunks.put(chunkName, dslCode);
-            
-            printChunk(chunkName, dslCode);
+        static JsonNode parse(String json) {
+            return new Parser(json.replaceAll("\\s+", "")).parse();
         }
-        return chunks;
     }
 
-    private static void printChunk(String chunkName, String dslCode) {
-        System.out.println("// === " + chunkName.toUpperCase() + " ===\n");
-        System.out.println("private static PactDslJsonBody " + chunkName + "() {");
-        System.out.println("  return PactDslJsonBody.object()");
-        System.out.print(dslCode);
-        System.out.println("    .closeObject();");
-        System.out.println("}");
-        System.out.println();
-    }
-
-    private static List<JsonStructure> findChunkCandidates(JsonStructure root) {
-        List<JsonStructure> candidates = new ArrayList<>();
-        traverse(root, 0, node -> {
-            if (shouldChunk(node)) {
-                candidates.add(node);
-            }
-        });
-        return candidates;
-    }
-
-    private static boolean shouldChunk(JsonStructure node) {
-        if (!(node instanceof JsonObject) && !(node instanceof JsonArray)) return false;
-        // Chunk complex structures
-        return node.asJsonObject().size() > 3 || node instanceof JsonArray;
-    }
-
-    private static String generateChunkDsl(JsonStructure node, int indentLevel) {
-        StringBuilder sb = new StringBuilder();
-        String indent = "    ".repeat(indentLevel);
+    static class Parser {
+        String json;
+        int pos = 0;
         
-        if (node instanceof JsonObject obj) {
-            for (Map.Entry<String, JsonValue> entry : obj.entrySet()) {
-                sb.append(generateFieldDsl(entry.getKey(), entry.getValue(), indent));
+        Parser(String json) { this.json = json; }
+        
+        JsonNode parse() {
+            expect('{');
+            JsonNode obj = new JsonNode();
+            while (!match('}')) {
+                String key = parseString();
+                expect(':');
+                JsonNode value = parseValue();
+                value.key = key;
+                obj.objects.put(key, value);
+                if (!match(',')) break;
             }
+            expect('}');
+            return obj;
         }
-        return sb.toString();
-    }
-
-    private static String generateFieldDsl(String key, JsonValue value, String indent) {
-        return switch (value.getValueType()) {
-            case STRING -> String.format("%s.stringType(\"%s\", \"%s\")\n", 
-                indent, key, escape(value.asJsonString().getString()));
-            case NUMBER -> {
-                if (value.asJsonNumber().isIntegral()) {
-                    yield String.format("%s.numberType(\"%s\", %dL)\n", 
-                        indent, key, value.asJsonNumber().longValue());
+        
+        JsonNode parseValue() {
+            if (match('{')) return parse();
+            if (match('[')) return parseArray();
+            if (match('"')) return parseStringNode();
+            if (match('t') || match('f')) return parseBoolean();
+            if (isDigit()) return parseNumber();
+            throw new RuntimeException("Invalid JSON at " + pos);
+        }
+        
+        JsonNode parseArray() {
+            JsonNode arr = new JsonNode();
+            arr.arrays = new ArrayList<>();
+            while (!match(']')) {
+                arr.arrays.add(parseValue());
+                if (!match(',')) break;
+            }
+            return arr;
+        }
+        
+        JsonNode parseStringNode() {
+            JsonNode n = new JsonNode();
+            n.stringVal = parseString();
+            return n;
+        }
+        
+        String parseString() {
+            expect('"');
+            StringBuilder sb = new StringBuilder();
+            while (!match('"')) {
+                char c = json.charAt(pos++);
+                if (c == '\\') {
+                    c = json.charAt(pos++);
+                    if (c == '"' || c == '\\') sb.append(c);
                 } else {
-                    yield String.format("%s.numberType(\"%s\", %f)\n", 
-                        indent, key, value.asJsonNumber().doubleValue());
+                    sb.append(c);
                 }
             }
-            case TRUE, FALSE -> String.format("%s.booleanType(\"%s\", %b)\n", 
-                indent, key, value.asJsonBoolean().getBoolean());
-            case OBJECT -> String.format("%s.object(\"%s\")\n", indent, key) +
-                generateChunkDsl(value.asJsonObject(), 3).replaceAll("    ", "      ") +
-                String.format("%s.closeObject()\n", indent);
-            case ARRAY -> handleArrayDsl(key, (JsonArray)value, indent);
-            default -> "";
-        };
-    }
-
-    private static String handleArrayDsl(String key, JsonArray array, String indent) {
-        if (array.isEmpty()) {
-            return String.format("%s.eachLike(\"%s\").closeArray()\n", indent, key);
+            return sb.toString();
         }
         
-        JsonValue first = array.get(0);
-        if (first instanceof JsonObject) {
-            return String.format("%s.eachLike(\"%s\")\n      .object()\n", indent, key) +
-                generateChunkDsl(first.asJsonObject(), 4).replaceAll("    ", "        ") +
-                String.format("%s.closeObject().closeArray()\n", indent);
-        } else {
-            return String.format("%s.eachLike(\"%s\", PactDslJsonRootValue.stringType(\"%s\")).closeArray()\n",
-                indent, key, first.asJsonString().getString());
+        JsonNode parseNumber() {
+            JsonNode n = new JsonNode();
+            int start = pos;
+            while (pos < json.length() && (isDigit() || json.charAt(pos) == '.' || json.charAt(pos) == 'e' || json.charAt(pos) == 'E' || json.charAt(pos) == '-' || json.charAt(pos) == '+')) {
+                pos++;
+            }
+            String num = json.substring(start, pos);
+            try {
+                n.longVal = Long.parseLong(num);
+            } catch (NumberFormatException e) {
+                n.doubleVal = Double.parseDouble(num);
+            }
+            return n;
+        }
+        
+        JsonNode parseBoolean() {
+            JsonNode n = new JsonNode();
+            if (matchString("true")) n.boolVal = true;
+            else if (matchString("false")) n.boolVal = false;
+            return n;
+        }
+        
+        boolean match(char c) {
+            if (pos < json.length() && json.charAt(pos) == c) {
+                pos++;
+                return true;
+            }
+            return false;
+        }
+        
+        void expect(char c) {
+            if (!match(c)) throw new RuntimeException("Expected " + c + " at " + pos);
+        }
+        
+        boolean matchString(String s) {
+            if (json.startsWith(s, pos)) {
+                pos += s.length();
+                return true;
+            }
+            return false;
+        }
+        
+        boolean isDigit() { return pos < json.length() && Character.isDigit(json.charAt(pos)); }
+    }
+
+    static void generateChunks(JsonNode root) {
+        List<JsonNode> candidates = findChunkCandidates(root);
+        for (JsonNode node : candidates) {
+            String name = camelCase(node.key);
+            System.out.println("// === " + name.toUpperCase() + "DSL ===\n");
+            System.out.println("private static PactDslJsonBody " + name + "Dsl() {");
+            System.out.println("  return PactDslJsonBody.object()");
+            generateDsl(node, "    ");
+            System.out.println("    .closeObject();");
+            System.out.println("}");
+            System.out.println();
         }
     }
 
-    private static void generateMainBody(JsonStructure root, Map<String, String> chunks) {
+    static void generateMainBody(JsonNode root) {
         System.out.println("// === MAIN BODY ===\n");
         System.out.println("PactDslJsonBody body = PactDslJsonBody.object()");
-        
-        if (root instanceof JsonObject obj) {
-            for (Map.Entry<String, JsonValue> entry : obj.entrySet()) {
-                String chunkName = camelCase(entry.getKey());
-                if (chunks.containsKey(chunkName)) {
-                    System.out.println("    ." + referenceChunk(chunkName) + ";");
-                } else {
-                    System.out.print(generateFieldDsl(entry.getKey(), entry.getValue(), "  "));
-                }
-            }
-        }
-        
+        generateDsl(root, "  ");
         System.out.println("    .asBody();");
     }
 
-    private static String referenceChunk(String chunkName) {
-        return switch (chunkName) {
-            case "user" -> "object(\"user\", userDsl())";
-            case "items" -> "eachLike(\"items\", itemsDsl())";
-            default -> "object(\"" + chunkName + "\", " + chunkName + "())";
-        };
-    }
-
-    private static JsonStructure parseJson(String json) {
-        try (JsonReader reader = Json.createReader(new StringReader(json))) {
-            return reader.read();
-        }
-    }
-
-    private static void traverse(JsonStructure node, int depth, Consumer<JsonStructure> visitor) {
-        visitor.accept(node);
-        if (node instanceof JsonObject obj) {
-            for (JsonValue value : obj.values()) {
-                traverse(value.asJsonObject(), depth + 1, visitor);
-            }
-        } else if (node instanceof JsonArray arr) {
-            for (JsonValue value : arr) {
-                traverse(value.asJsonObject(), depth + 1, visitor);
-            }
-        }
-    }
-
-    private static String camelCase(String s) { 
-        return Character.toLowerCase(s.charAt(0)) + s.substring(1); 
-    }
-    
-    private static String escape(String s) { 
-        return s.replace("\\", "\\\\").replace("\"", "\\\""); 
-    }
-
-    @FunctionalInterface
-    interface Consumer<T> {
-        void accept(T t);
-    }
-}
+    static void generateDsl(JsonNode node, String indent) {
+        for (Map.Entry<String, JsonNode> entry : node.objects.entrySet()) {
+            String key = entry.getKey();
+            JsonNode v
