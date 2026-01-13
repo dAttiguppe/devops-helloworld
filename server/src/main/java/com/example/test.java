@@ -48,24 +48,21 @@ public class JsonToLambdaDsl {
         
         JsonNode parseObject() {
             skipWhitespace();
-            if (json.charAt(pos) != '{') throw new RuntimeException("Expected {");
+            if (pos >= json.length() || json.charAt(pos) != '{') throw new RuntimeException("Expected {");
             pos++;
-            
             JsonNode obj = new JsonNode();
             skipWhitespace();
             
             while (pos < json.length() && json.charAt(pos) != '}') {
                 String key = parseString();
                 skipWhitespace();
-                if (json.charAt(pos) != ':') throw new RuntimeException("Expected :");
+                if (pos >= json.length() || json.charAt(pos) != ':') throw new RuntimeException("Expected :");
                 pos++;
-                
                 skipWhitespace();
                 JsonNode value = parseValue();
                 obj.objects.put(key, value);
-                
                 skipWhitespace();
-                if (json.charAt(pos) == ',') {
+                if (pos < json.length() && json.charAt(pos) == ',') {
                     pos++;
                     skipWhitespace();
                 }
@@ -78,27 +75,25 @@ public class JsonToLambdaDsl {
         
         JsonNode parseValue() {
             skipWhitespace();
+            if (pos >= json.length()) throw new RuntimeException("Unexpected end of input");
             char c = json.charAt(pos);
-            
             if (c == '{') return parseObject();
             if (c == '[') return parseArray();
             if (c == '"') return parseStringNode();
             if (c == 't' || c == 'f') return parseBoolean();
             if (Character.isDigit(c) || c == '-') return parseNumber();
-            
             throw new RuntimeException("Invalid char: " + c + " at " + pos);
         }
         
         JsonNode parseArray() {
-            pos++; // skip [
+            pos++;
             JsonNode arr = new JsonNode();
             arr.arrays = new ArrayList<>();
-            
             skipWhitespace();
             while (pos < json.length() && json.charAt(pos) != ']') {
                 arr.arrays.add(parseValue());
                 skipWhitespace();
-                if (json.charAt(pos) == ',') {
+                if (pos < json.length() && json.charAt(pos) == ',') {
                     pos++;
                     skipWhitespace();
                 }
@@ -116,22 +111,15 @@ public class JsonToLambdaDsl {
         }
         
         String parseString() {
-            if (json.charAt(pos) != '"') throw new RuntimeException("Expected \"");
+            if (pos >= json.length() || json.charAt(pos) != '"') throw new RuntimeException("Expected \"");
             pos++;
             StringBuilder sb = new StringBuilder();
-            
             while (pos < json.length() && json.charAt(pos) != '"') {
                 char c = json.charAt(pos++);
                 if (c == '\\') {
                     if (pos >= json.length()) throw new RuntimeException("Unterminated string");
                     c = json.charAt(pos++);
-                    if (c == '"' || c == '\\' || c == '/') sb.append(c);
-                    else if (c == 'b') sb.append('\b');
-                    else if (c == 'f') sb.append('\f');
-                    else if (c == 'n') sb.append('\n');
-                    else if (c == 'r') sb.append('\r');
-                    else if (c == 't') sb.append('\t');
-                    else sb.append(c);
+                    sb.append(c);
                 } else {
                     sb.append(c);
                 }
@@ -148,7 +136,6 @@ public class JsonToLambdaDsl {
             while (pos < json.length() && 
                    (Character.isDigit(json.charAt(pos)) || 
                     "+-eE.".indexOf(json.charAt(pos)) >= 0)) pos++;
-            
             String num = json.substring(start, pos);
             try {
                 n.longVal = Long.parseLong(num);
@@ -161,11 +148,9 @@ public class JsonToLambdaDsl {
         JsonNode parseBoolean() {
             JsonNode n = new JsonNode();
             if (json.startsWith("true", pos)) {
-                n.boolVal = true;
-                pos += 4;
+                n.boolVal = true; pos += 4;
             } else if (json.startsWith("false", pos)) {
-                n.boolVal = false;
-                pos += 5;
+                n.boolVal = false; pos += 5;
             } else {
                 throw new RuntimeException("Expected boolean");
             }
@@ -173,22 +158,23 @@ public class JsonToLambdaDsl {
         }
         
         void skipWhitespace() {
-            while (pos < json.length() && 
-                   " \t\n\r".indexOf(json.charAt(pos)) >= 0) pos++;
+            while (pos < json.length() && " \t\n\r".indexOf(json.charAt(pos)) >= 0) pos++;
         }
     }
 
     static void generateChunks(JsonNode root) {
-        List<JsonNode> candidates = findChunkCandidates(root);
-        for (JsonNode node : candidates) {
-            String name = camelCase(node.key);
-            System.out.println("// === " + name.toUpperCase() + "DSL ===\n");
-            System.out.println("private static PactDslJsonBody " + name + "Dsl() {");
-            System.out.println("  return PactDslJsonBody.object()");
-            generateDsl(node, "    ");
-            System.out.println("    .closeObject();");
-            System.out.println("}");
-            System.out.println();
+        for (Map.Entry<String, JsonNode> entry : root.objects.entrySet()) {
+            JsonNode node = entry.getValue();
+            if (node.objects.size() > 1) {
+                String name = camelCase(entry.getKey());
+                System.out.println("// === " + name.toUpperCase() + "DSL ===\n");
+                System.out.println("private static PactDslJsonBody " + name + "Dsl() {");
+                System.out.println("  return PactDslJsonBody.object()");
+                generateDsl(node, "    ");
+                System.out.println("    .closeObject();");
+                System.out.println("}");
+                System.out.println();
+            }
         }
     }
 
@@ -233,19 +219,6 @@ public class JsonToLambdaDsl {
             }
         }
         System.out.printf("%s.closeArray()\n", indent);
-    }
-
-    static List<JsonNode> findChunkCandidates(JsonNode node) {
-        List<JsonNode> candidates = new ArrayList<>();
-        findChunks(node, candidates);
-        return candidates;
-    }
-
-    static void findChunks(JsonNode node, List<JsonNode> candidates) {
-        if (node.objects.size() > 1) candidates.add(node);
-        for (JsonNode child : node.objects.values()) {
-            findChunks(child, candidates);
-        }
     }
 
     static String camelCase(String s) {
