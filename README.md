@@ -145,4 +145,119 @@ class InternalDataMultipartUploadSimulation extends Simulation {
 }
 
 
+import au.com.dius.pact.consumer.dsl.*;
+import com.fasterxml.jackson.databind.*;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Pattern;
+
+public class JsonToPactDslConverter {
+
+    private static final Pattern DATE =
+            Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
+    private static final Pattern DATETIME =
+            Pattern.compile("\\d{4}-\\d{2}-\\d{2}T.*");
+
+    public static PactDslJsonBody convert(String json) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(json);
+
+        if (!root.isObject()) {
+            throw new IllegalArgumentException("Root JSON must be an object");
+        }
+
+        PactDslJsonBody body = new PactDslJsonBody();
+        populateObject(body, root);
+        return body;
+    }
+
+    private static void populateObject(PactDslJsonBody body, JsonNode node) {
+        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            addField(body, field.getKey(), field.getValue());
+        }
+    }
+
+    private static void addField(PactDslJsonBody body, String key, JsonNode value) {
+
+        if (value.isTextual()) {
+            handleString(body, key, value.asText());
+
+        } else if (value.isInt() || value.isLong()) {
+            body.integerType(key, value.asLong());
+
+        } else if (value.isFloatingPointNumber()) {
+            body.decimalType(key, value.decimalValue());
+
+        } else if (value.isBoolean()) {
+            body.booleanType(key, value.asBoolean());
+
+        } else if (value.isObject()) {
+            body.object(key, o -> populateObject(o, value));
+
+        } else if (value.isArray()) {
+            handleArray(body, key, value);
+
+        } else if (value.isNull()) {
+            body.nullValue(key);
+        }
+    }
+
+    private static void handleArray(PactDslJsonBody body, String key, JsonNode array) {
+        if (array.isEmpty()) {
+            body.array(key);
+            return;
+        }
+
+        JsonNode first = array.get(0);
+
+        body.minArrayLike(key, 1, a -> {
+            if (first.isObject()) {
+                populateObject(a, first);
+            } else {
+                addAnonymousValue(a, first);
+            }
+        });
+    }
+
+    private static void addAnonymousValue(PactDslJsonBody body, JsonNode value) {
+        if (value.isTextual()) {
+            body.stringType(value.asText());
+        } else if (value.isInt() || value.isLong()) {
+            body.integerType(value.asLong());
+        } else if (value.isFloatingPointNumber()) {
+            body.decimalType(value.decimalValue());
+        } else if (value.isBoolean()) {
+            body.booleanType(value.asBoolean());
+        }
+    }
+
+    private static void handleString(PactDslJsonBody body, String key, String value) {
+
+        if (isUUID(value)) {
+            body.uuid(key, value);
+
+        } else if (DATETIME.matcher(value).matches()) {
+            body.datetime(key, "yyyy-MM-dd'T'HH:mm:ss.SSSX", value);
+
+        } else if (DATE.matcher(value).matches()) {
+            body.date(key, "yyyy-MM-dd", value);
+
+        } else {
+            body.stringType(key, value);
+        }
+    }
+
+    private static boolean isUUID(String value) {
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+}
 
