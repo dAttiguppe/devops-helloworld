@@ -1,3 +1,12 @@
+
+javac -cp ".:consumer-4.5.0.jar" JsonToPactDslStandalone.java
+java -cp ".:consumer-4.5.0.jar" JsonToPactDslStandalone
+
+
+
+
+
+
 import au.com.dius.pact.consumer.dsl.PactDslJsonBody;
 import au.com.dius.pact.consumer.dsl.PactDslJsonRootValue;
 import com.fasterxml.jackson.databind.JsonNode;
