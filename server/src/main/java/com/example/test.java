@@ -1,9 +1,10 @@
 import java.io.*;
 import java.util.*;
 
-public class JsonToPactDsl {
+public class jsonToDSL {
 
-    private static int indent = 1;
+    private static int dslCounter = 1;
+    private static final List<String> generatedDsls = new ArrayList<>();
 
     public static void main(String[] args) throws Exception {
         if (args.length != 1) {
@@ -12,15 +13,27 @@ public class JsonToPactDsl {
         }
 
         String json = readFile(args[0]).trim();
+        String rootDsl = generateObjectDsl("body", json);
 
-        System.out.println("PactDslJsonBody body = new PactDslJsonBody()");
-        parseObject(json);
-        System.out.println(";");
+        // Print DSL fragments
+        for (String dsl : generatedDsls) {
+            System.out.println(dsl);
+            System.out.println();
+        }
+
+        System.out.println("// Root DSL");
+        System.out.println("PactDslJsonBody body = " + rootDsl + ";");
     }
 
-    // ================= PARSER =================
+    // ================= OBJECT =================
 
-    static void parseObject(String json) {
+    static String generateObjectDsl(String name, String json) {
+        String varName = name + "Dsl" + (dslCounter++);
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("PactDslJsonBody ").append(varName)
+                .append(" = new PactDslJsonBody()\n");
+
         json = trim(json, '{', '}');
         for (String token : splitTopLevel(json)) {
             String[] kv = token.split(":", 2);
@@ -29,59 +42,87 @@ public class JsonToPactDsl {
             String key = stripQuotes(kv[0].trim());
             String value = kv[1].trim();
 
-            if (value.startsWith("{")) {
-                print(".object(\"" + key + "\")");
-                indent++;
-                parseObject(value);
-                indent--;
-                print(".closeObject()");
+            if (value.equals("null")) {
+                sb.append("    .nullValue(\"").append(key).append("\")\n");
+            }
+            else if (value.startsWith("{")) {
+                String childDsl = generateObjectDsl(key, value);
+                sb.append("    .object(\"").append(key).append("\")\n")
+                        .append("        .addObject(").append(childDsl).append(")\n")
+                        .append("    .closeObject()\n");
             }
             else if (value.startsWith("[")) {
-                print(".array(\"" + key + "\")");
-                indent++;
-                parseArray(value);
-                indent--;
-                print(".closeArray()");
+                sb.append(generateArrayDsl(key, value));
             }
             else {
-                printPrimitive(key, value);
+                sb.append("    ").append(primitiveDsl(key, value)).append("\n");
             }
         }
+
+        sb.append(";");
+        generatedDsls.add(sb.toString());
+        return varName;
     }
 
-    static void parseArray(String json) {
+    // ================= ARRAY =================
+
+    static String generateArrayDsl(String key, String json) {
         json = trim(json, '[', ']');
-        for (String value : splitTopLevel(json)) {
-            value = value.trim();
+        String[] values = splitTopLevel(json);
 
-            if (value.startsWith("{")) {
-                print(".object()");
-                indent++;
-                parseObject(value);
-                indent--;
-                print(".closeObject()");
-            }
-            else {
-                printPrimitive(null, value);
+        StringBuilder sb = new StringBuilder();
+        sb.append("    .minArrayLike(\"").append(key).append("\", 1)\n");
+
+        if (values.length > 0 && values[0].trim().startsWith("{")) {
+            String itemDsl = generateObjectDsl(key + "Item", values[0]);
+            sb.append("        .addObject(").append(itemDsl).append(")\n");
+        } else {
+            for (String v : values) {
+                sb.append("        ").append(primitiveDsl(null, v.trim())).append("\n");
             }
         }
+
+        sb.append("    .closeArray()\n");
+        return sb.toString();
     }
 
-    static void printPrimitive(String key, String value) {
+    // ================= PRIMITIVES =================
+
+    static String primitiveDsl(String key, String value) {
         String field = key == null ? "" : "\"" + key + "\", ";
 
+        // String
         if (value.startsWith("\"")) {
-            print(".stringType(" + field + "\"" + stripQuotes(value) + "\")");
+            String val = stripQuotes(value);
+
+            if (isEnum(val)) {
+                return ".stringValue(" + field + "\"" + val + "\")";
+            }
+            if (isEmail(val)) {
+                return ".stringMatcher(" + field +
+                        "\"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\\\.[a-zA-Z]{2,}\", \"" + val + "\")";
+            }
+            return ".stringType(" + field + "\"" + val + "\")";
         }
-        else if (value.equals("true") || value.equals("false")) {
-            print(".booleanType(" + field + value + ")");
+
+        // Boolean
+        if (value.equals("true") || value.equals("false")) {
+            return ".booleanType(" + field + value + ")";
         }
-        else {
-            print(".numberType(" + field + value + ")");
-        }
+
+        // Number
+        return ".numberType(" + field + value + ")";
     }
 
     // ================= HELPERS =================
+
+    static boolean isEnum(String s) {
+        return s.matches("^[A-Z0-9_]+$");
+    }
+
+    static boolean isEmail(String s) {
+        return s.contains("@");
+    }
 
     static String[] splitTopLevel(String s) {
         List<String> parts = new ArrayList<>();
@@ -113,16 +154,17 @@ public class JsonToPactDsl {
         return s.replaceAll("^\"|\"$", "");
     }
 
-    static void print(String line) {
-        System.out.println("    ".repeat(indent) + line);
-    }
-
     static String readFile(String file) throws IOException {
         BufferedReader br = new BufferedReader(new FileReader(file));
         StringBuilder sb = new StringBuilder();
         String line;
-        while ((line = br.readLine()) != null) sb.append(line);
+
+        while ((line = br.readLine()) != null) {
+            sb.append(line);
+        }
+
         br.close();
         return sb.toString();
     }
+
 }
